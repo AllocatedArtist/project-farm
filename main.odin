@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:math"
 import "core:mem"
+import "core:strings"
 
 import rl "vendor:raylib"
 import "vendor:raylib/rlgl"
@@ -105,6 +106,31 @@ update_sprite_size :: proc(sprite: ^rl.Rectangle, grid_size: f32) {
 	sprite.height = grid_size
 }
 
+text :: proc(
+	font: rl.Font,
+	text: string,
+	y: f32,
+	viewport_width: i32,
+	padding: f32,
+	color: rl.Color,
+) {
+	ctext := strings.clone_to_cstring(text)
+
+	default_font: f32 = 46.0
+	font_size: f32 =
+		default_font *
+		(cast(f32)rl.GetScreenWidth() / cast(f32)rl.GetMonitorWidth(rl.GetCurrentMonitor()))
+
+	rl.DrawTextEx(
+		font,
+		ctext,
+		rl.Vector2{cast(f32)viewport_width + padding, y * font_size + padding},
+		font_size,
+		1.0,
+		color,
+	)
+}
+
 main :: proc() {
 
 	rl.SetConfigFlags(rl.ConfigFlags{.WINDOW_RESIZABLE})
@@ -115,6 +141,9 @@ main :: proc() {
 	rl.MaximizeWindow()
 
 	rl.SetTargetFPS(60)
+
+	main_font := rl.LoadFont("assets/font/MajorMonoDisplay-Regular.ttf")
+	defer rl.UnloadFont(main_font)
 
 	tileset_texture := rl.LoadTexture("assets/ts.png")
 	defer rl.UnloadTexture(tileset_texture)
@@ -292,14 +321,33 @@ main :: proc() {
 
 		rl.EndMode2D()
 
-		rl.ClearBackground(rl.GRAY)
+		custom_dark := rl.Color{}
+		custom_dark.r = 29
+		custom_dark.g = 22
+		custom_dark.b = 22
+		custom_dark.a = 255
+
+		rl.ClearBackground(custom_dark)
 		source_game := rl.Rectangle{}
 		source_game.x = 0
 		source_game.y = 0
 		source_game.width = cast(f32)viewport_width
 		source_game.height = -cast(f32)viewport_height
 
+
 		rl.DrawTexturePro(game_screen.texture, source_game, viewport, rl.Vector2(0), 0, rl.WHITE)
+
+		padding: f32 = 10
+		text(main_font, "todo:", 0, viewport_width, padding, rl.WHITE)
+		text(main_font, "- galaxy stride 3", 1, viewport_width, padding, rl.WHITE)
+		text(main_font, "- synthslayer", 2, viewport_width, padding, rl.WHITE)
+		text(main_font, "- bloodfarme", 3, viewport_width, padding, rl.WHITE)
+		text(main_font, "beets: 69", 5, viewport_width, padding, rl.WHITE)
+		text(main_font, "dirt: 32", 6, viewport_width, padding, rl.WHITE)
+		text(main_font, "money: $100", 8, viewport_width, padding, rl.WHITE)
+		text(main_font, "quota: 200 beets", 10, viewport_width, padding, rl.RED)
+
+		text(main_font, "your god commands", 12, viewport_width, 0, rl.RED)
 
 
 	}
