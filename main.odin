@@ -106,6 +106,8 @@ update_sprite_size :: proc(sprite: ^rl.Rectangle, grid_size: f32) {
 	sprite.height = grid_size
 }
 
+DEFAULT_FONT_SIZE: f32 : 46.0
+
 text :: proc(
 	font: rl.Font,
 	text: string,
@@ -116,10 +118,9 @@ text :: proc(
 ) {
 	ctext := strings.clone_to_cstring(text)
 
-	default_font: f32 = 46.0
 	default_monitor_width: f32 = 3456
 	ratio := cast(f32)rl.GetScreenWidth() / default_monitor_width
-	font_size: f32 = default_font * ratio
+	font_size: f32 = DEFAULT_FONT_SIZE * ratio
 
 	padding := padding * ratio
 
@@ -153,8 +154,20 @@ main :: proc() {
 	main_font := rl.LoadFont("assets/font/MajorMonoDisplay-Regular.ttf")
 	defer rl.UnloadFont(main_font)
 
+	// font_atlas := rl.GenImageFontAtlas(
+	// 	main_font.glyphs,
+	// 	&main_font.recs,
+	// 	main_font.glyphCount,
+	// 	main_font.baseSize,
+	// 	main_font.glyphPadding,
+	// 	1,
+	// )
+	// main_font.texture = rl.LoadTextureFromImage(font_atlas)
+	// rl.UnloadImage(font_atlas)
 	tileset_texture := rl.LoadTexture("assets/ts1.png")
 	defer rl.UnloadTexture(tileset_texture)
+
+	rl.SetTextureFilter(main_font.texture, .TRILINEAR)
 
 	tileset_width: i32 = 17
 	tileset_height: i32 = 1
