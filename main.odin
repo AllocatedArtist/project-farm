@@ -142,9 +142,9 @@ grid_pos_from_world :: proc(pos: rl.Vector2, grid_size: f32) -> (grid_x: i32, gr
 
 main :: proc() {
 
-	rl.SetConfigFlags(rl.ConfigFlags{.WINDOW_RESIZABLE})
+	rl.SetConfigFlags(rl.ConfigFlags{.WINDOW_RESIZABLE, .MSAA_4X_HINT})
 
-	rl.InitWindow(800, 800, "Farming game")
+	rl.InitWindow(800, 800, "Blood Beets")
 	defer rl.CloseWindow()
 
 	rl.MaximizeWindow()
@@ -154,16 +154,6 @@ main :: proc() {
 	main_font := rl.LoadFont("assets/font/MajorMonoDisplay-Regular.ttf")
 	defer rl.UnloadFont(main_font)
 
-	// font_atlas := rl.GenImageFontAtlas(
-	// 	main_font.glyphs,
-	// 	&main_font.recs,
-	// 	main_font.glyphCount,
-	// 	main_font.baseSize,
-	// 	main_font.glyphPadding,
-	// 	1,
-	// )
-	// main_font.texture = rl.LoadTextureFromImage(font_atlas)
-	// rl.UnloadImage(font_atlas)
 	tileset_texture := rl.LoadTexture("assets/ts1.png")
 	defer rl.UnloadTexture(tileset_texture)
 
