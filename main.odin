@@ -117,7 +117,8 @@ text :: proc(
 	ctext := strings.clone_to_cstring(text)
 
 	default_font: f32 = 46.0
-	ratio := cast(f32)rl.GetScreenWidth() / cast(f32)rl.GetMonitorWidth(rl.GetCurrentMonitor())
+	default_monitor_width: f32 = 3456
+	ratio := cast(f32)rl.GetScreenWidth() / default_monitor_width
 	font_size: f32 = default_font * ratio
 
 	padding := padding * ratio
@@ -174,26 +175,6 @@ main :: proc() {
 	grass.height = tile_size
 
 	map_size: i32 : 40
-
-	// bitmask_to_tile: map[u8][2]i32
-	// defer delete(bitmask_to_tile)
-
-	// bitmask_to_tile[0] = [2]i32{6, 5}
-	// bitmask_to_tile[1] = [2]i32{3, 5}
-	// bitmask_to_tile[2] = [2]i32{1, 3}
-	// bitmask_to_tile[3] = [2]i32{6, 3}
-	// bitmask_to_tile[4] = [2]i32{3, 2}
-	// bitmask_to_tile[5] = [2]i32{3, 4}
-	// bitmask_to_tile[6] = [2]i32{6, 1}
-	// bitmask_to_tile[7] = [2]i32{6, 2}
-	// bitmask_to_tile[8] = [2]i32{4, 3}
-	// bitmask_to_tile[9] = [2]i32{8, 3}
-	// bitmask_to_tile[10] = [2]i32{2, 3}
-	// bitmask_to_tile[11] = [2]i32{7, 3}
-	// bitmask_to_tile[12] = [2]i32{8, 1}
-	// bitmask_to_tile[13] = [2]i32{8, 2}
-	// bitmask_to_tile[14] = [2]i32{7, 1}
-	// bitmask_to_tile[15] = [2]i32{7, 2}
 
 	seeds: map[[2]i32]b32
 	defer delete(seeds)
