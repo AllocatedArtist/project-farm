@@ -132,6 +132,12 @@ text :: proc(
 	)
 }
 
+grid_pos_from_world :: proc(pos: rl.Vector2, grid_size: f32) -> (grid_x: i32, grid_y: i32) {
+	grid_x = cast(i32)math.floor(pos.x / grid_size)
+	grid_y = cast(i32)math.floor(pos.y / grid_size)
+	return
+}
+
 main :: proc() {
 
 	rl.SetConfigFlags(rl.ConfigFlags{.WINDOW_RESIZABLE})
@@ -146,12 +152,11 @@ main :: proc() {
 	main_font := rl.LoadFont("assets/font/MajorMonoDisplay-Regular.ttf")
 	defer rl.UnloadFont(main_font)
 
-	tileset_texture := rl.LoadTexture("assets/ts.png")
+	tileset_texture := rl.LoadTexture("assets/ts1.png")
 	defer rl.UnloadTexture(tileset_texture)
 
-	tileset_width: i32 = 10
-	tileset_height: i32 = 10
-
+	tileset_width: i32 = 17
+	tileset_height: i32 = 1
 	tile_size: f32 = 32
 	grid_size: f32 = 64
 
@@ -170,25 +175,25 @@ main :: proc() {
 
 	map_size: i32 : 40
 
-	bitmask_to_tile: map[u8][2]i32
-	defer delete(bitmask_to_tile)
+	// bitmask_to_tile: map[u8][2]i32
+	// defer delete(bitmask_to_tile)
 
-	bitmask_to_tile[0] = [2]i32{6, 5}
-	bitmask_to_tile[1] = [2]i32{3, 5}
-	bitmask_to_tile[2] = [2]i32{1, 3}
-	bitmask_to_tile[3] = [2]i32{6, 3}
-	bitmask_to_tile[4] = [2]i32{3, 2}
-	bitmask_to_tile[5] = [2]i32{3, 4}
-	bitmask_to_tile[6] = [2]i32{6, 1}
-	bitmask_to_tile[7] = [2]i32{6, 2}
-	bitmask_to_tile[8] = [2]i32{4, 3}
-	bitmask_to_tile[9] = [2]i32{8, 3}
-	bitmask_to_tile[10] = [2]i32{2, 3}
-	bitmask_to_tile[11] = [2]i32{7, 3}
-	bitmask_to_tile[12] = [2]i32{8, 1}
-	bitmask_to_tile[13] = [2]i32{8, 2}
-	bitmask_to_tile[14] = [2]i32{7, 1}
-	bitmask_to_tile[15] = [2]i32{7, 2}
+	// bitmask_to_tile[0] = [2]i32{6, 5}
+	// bitmask_to_tile[1] = [2]i32{3, 5}
+	// bitmask_to_tile[2] = [2]i32{1, 3}
+	// bitmask_to_tile[3] = [2]i32{6, 3}
+	// bitmask_to_tile[4] = [2]i32{3, 2}
+	// bitmask_to_tile[5] = [2]i32{3, 4}
+	// bitmask_to_tile[6] = [2]i32{6, 1}
+	// bitmask_to_tile[7] = [2]i32{6, 2}
+	// bitmask_to_tile[8] = [2]i32{4, 3}
+	// bitmask_to_tile[9] = [2]i32{8, 3}
+	// bitmask_to_tile[10] = [2]i32{2, 3}
+	// bitmask_to_tile[11] = [2]i32{7, 3}
+	// bitmask_to_tile[12] = [2]i32{8, 1}
+	// bitmask_to_tile[13] = [2]i32{8, 2}
+	// bitmask_to_tile[14] = [2]i32{7, 1}
+	// bitmask_to_tile[15] = [2]i32{7, 2}
 
 	seeds: map[[2]i32]b32
 	defer delete(seeds)
@@ -197,6 +202,7 @@ main :: proc() {
 	bitmask: [map_size * map_size]u8
 
 	prev_grid_pos: [2]i32 = {-1, -1}
+	prev_place: bool = false
 
 	camera: rl.Camera2D
 	camera.zoom = 1.0
@@ -254,21 +260,22 @@ main :: proc() {
 			)
 		}
 
-
 		mouse_pos := rl.GetScreenToWorld2D(rl.GetMousePosition(), camera)
 
-		if rl.IsMouseButtonDown(rl.MouseButton.LEFT) && intersect_viewport {
-			grid_x: i32 = cast(i32)math.floor(mouse_pos.x / grid_size)
-			grid_y: i32 = cast(i32)math.floor(mouse_pos.y / grid_size)
+		place := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
+		destroy := rl.IsMouseButtonDown(rl.MouseButton.RIGHT)
+
+		if (place || destroy) && intersect_viewport && !(place && destroy) {
+			grid_x, grid_y := grid_pos_from_world(mouse_pos, grid_size)
 			index := get_index_from_tile_coordinates(grid_x, grid_y, map_size)
 
 			grid_x_valid := grid_x >= 0 && grid_x < map_size
 			grid_y_valid := grid_y >= 0 && grid_y < map_size
-
 			if !is_out_of_bounds(index, map_size) && grid_x_valid && grid_y_valid {
-				if prev_grid_pos.x != grid_x || prev_grid_pos.y != grid_y {
-
-					map_data[index] = 1
+				if (prev_grid_pos.x != grid_x || prev_grid_pos.y != grid_y) ||
+				   (prev_place != place) {
+					prev_place = place
+					map_data[index] = place ? 1 : 0
 
 					auto_tile_update(map_data[:], bitmask[:])
 					prev_grid_pos = [2]i32{grid_x, grid_y}
@@ -293,9 +300,8 @@ main :: proc() {
 					rl.DrawTexturePro(tileset_texture, grass, sprite, rl.Vector2(0), 0, rl.WHITE)
 				} else {
 					dirt_tile := rl.Rectangle{}
-					tile_coord := bitmask_to_tile[bitmask[index]]
-					dirt_tile.x = f32(tile_coord.x) * tile_size
-					dirt_tile.y = f32(tile_coord.y) * tile_size
+					dirt_tile.x = cast(f32)(bitmask[index] + 1) * tile_size
+					dirt_tile.y = 0
 					dirt_tile.width = tile_size
 					dirt_tile.height = tile_size
 
