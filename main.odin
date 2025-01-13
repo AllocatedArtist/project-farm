@@ -117,9 +117,10 @@ text :: proc(
 	ctext := strings.clone_to_cstring(text)
 
 	default_font: f32 = 46.0
-	font_size: f32 =
-		default_font *
-		(cast(f32)rl.GetScreenWidth() / cast(f32)rl.GetMonitorWidth(rl.GetCurrentMonitor()))
+	ratio := cast(f32)rl.GetScreenWidth() / cast(f32)rl.GetMonitorWidth(rl.GetCurrentMonitor())
+	font_size: f32 = default_font * ratio
+
+	padding := padding * ratio
 
 	rl.DrawTextEx(
 		font,
@@ -347,7 +348,7 @@ main :: proc() {
 		text(main_font, "money: $100", 8, viewport_width, padding, rl.WHITE)
 		text(main_font, "quota: 200 beets", 10, viewport_width, padding, rl.RED)
 
-		text(main_font, "your god commands", 12, viewport_width, 0, rl.RED)
+		text(main_font, "your god commands", 12, viewport_width, 80, rl.PINK)
 
 
 	}
