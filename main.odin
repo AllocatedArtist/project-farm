@@ -110,26 +110,9 @@ main :: proc() {
 	rl.SetConfigFlags(rl.ConfigFlags{.WINDOW_RESIZABLE})
 
 	rl.InitWindow(800, 800, "Farming game")
-
-	default_display_w: f32 = 3456
-	default_display_h: f32 = 2160
-
-	monitor_w: i32 = rl.GetMonitorWidth(rl.GetCurrentMonitor())
-	monitor_h: i32 = rl.GetMonitorHeight(rl.GetCurrentMonitor())
-
-	ratio_display_x := default_display_w / cast(f32)monitor_w
-	ratio_display_y := default_display_h / cast(f32)monitor_h
-
-	default_w := 1600 * ratio_display_x
-	default_h := 1480 * ratio_display_y
-
-	rl.SetWindowSize(cast(i32)default_w, cast(i32)default_h)
-	rl.SetWindowPosition(
-		(monitor_w / 2) - cast(i32)default_w / 2,
-		(monitor_h / 2) - cast(i32)default_h / 2,
-	)
-
 	defer rl.CloseWindow()
+
+	rl.MaximizeWindow()
 
 	rl.SetTargetFPS(60)
 
