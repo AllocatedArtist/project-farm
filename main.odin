@@ -1,4 +1,4 @@
-package main
+package beets
 
 import "core:fmt"
 import "core:math"
@@ -107,27 +107,33 @@ update_sprite_size :: proc(sprite: ^rl.Rectangle, grid_size: f32) {
 }
 
 DEFAULT_FONT_SIZE: f32 : 46.0
+LARGEST_FONT_SIZE: f32 : 92.0
+
+DEFAULT_MONITOR_WIDTH: f32 : 3456
+
+horizontal_ratio_get :: proc() -> f32 {
+	return cast(f32)rl.GetScreenWidth() / DEFAULT_MONITOR_WIDTH
+}
 
 text :: proc(
 	font: rl.Font,
 	text: string,
-	y: f32,
-	viewport_width: i32,
+	pos: [2]f32,
 	padding: f32,
 	color: rl.Color,
+	size: f32 = DEFAULT_FONT_SIZE,
 ) {
 	ctext := strings.clone_to_cstring(text)
 
-	default_monitor_width: f32 = 3456
-	ratio := cast(f32)rl.GetScreenWidth() / default_monitor_width
-	font_size: f32 = DEFAULT_FONT_SIZE * ratio
+	ratio := horizontal_ratio_get()
+	font_size: f32 = size * ratio
 
 	padding := padding * ratio
 
 	rl.DrawTextEx(
 		font,
 		ctext,
-		rl.Vector2{cast(f32)viewport_width + padding, y * font_size + padding},
+		rl.Vector2{cast(f32)pos.x + padding, pos.y * DEFAULT_FONT_SIZE * ratio},
 		font_size,
 		1.0,
 		color,
@@ -138,6 +144,256 @@ grid_pos_from_world :: proc(pos: rl.Vector2, grid_size: f32) -> (grid_x: i32, gr
 	grid_x = cast(i32)math.floor(pos.x / grid_size)
 	grid_y = cast(i32)math.floor(pos.y / grid_size)
 	return
+}
+
+Player :: struct {
+	//what's earned from resources
+	money:    i32,
+	beets:    i32,
+
+	//resources
+	dirt:     i32,
+	seeds:    i32,
+	turrets:  i32,
+	selected: ItemCategory,
+}
+
+INITIAL_MONEY: i32 : 100
+
+//laissez-faire is not a thing
+MAX_MONEY: i32 : 10_000_000
+
+player_pay_money :: proc(player: ^Player, amount: i32) -> b32 {
+	if player.money >= amount {
+		player.money -= amount
+		player.money = clamp(player.money, 0, MAX_MONEY)
+		return true
+	}
+	return false
+}
+
+player_earn_money :: proc(player: ^Player, amount: i32) {
+	player.money += amount
+	player.money = min(player.money, MAX_MONEY)
+}
+
+player_balance_check :: proc(player: ^Player, required: i32) -> b32 {
+	return player.money >= required
+}
+
+ItemCategory :: enum {
+	Dirt,
+	Seed,
+	Ballista,
+}
+
+ItemType :: union {
+	ShopItemButton,
+	InventoryItemButton,
+	TurretUpgradeItemButton,
+}
+
+ShopItemButton :: struct {
+	price:    i32,
+	category: ItemCategory,
+	timer:    f32,
+	pressed:  b32,
+}
+
+InventoryItemButton :: ItemCategory
+
+
+TurretUpgradeItemButton :: struct {
+	nothing: f32,
+}
+
+
+ItemButton :: struct {
+	thumbnail: rl.Texture2D,
+	on_click:  proc(user_data: rawptr, item_data: rawptr),
+	name:      string,
+	item_type: ItemType,
+}
+
+BUTTON_IDLE_COLOR: rl.Color : rl.WHITE
+BUTTON_HOVER_COLOR: rl.Color : rl.GRAY
+BUTTON_CLICK_COLOR: rl.Color : rl.SKYBLUE
+
+item_button_update :: proc(
+	font: rl.Font,
+	item_button: ^ItemButton,
+	bounds: rl.Rectangle,
+	user_data: rawptr,
+	padding: f32,
+) {
+
+	bounds := bounds
+	bounds.x += padding * horizontal_ratio_get()
+	bounds.y *= horizontal_ratio_get()
+	bounds.width *= horizontal_ratio_get()
+	bounds.height *= horizontal_ratio_get()
+
+	hovering := rl.CheckCollisionPointRec(rl.GetMousePosition(), bounds)
+	left_pressed := rl.IsMouseButtonPressed(.LEFT)
+	left_down := rl.IsMouseButtonDown(.LEFT)
+	left_released := rl.IsMouseButtonReleased(.LEFT)
+
+
+	color := hovering ? BUTTON_HOVER_COLOR : BUTTON_IDLE_COLOR
+	border_color := rl.GREEN
+
+	switch &type in item_button.item_type {
+	case ShopItemButton:
+		{
+			TIME_LIMIT: f32 : 0.85
+			if left_pressed && hovering {
+				type.pressed = true
+				item_button.on_click(user_data, &type)
+				color = BUTTON_CLICK_COLOR
+			}
+
+			if left_down && hovering {
+				type.timer += rl.GetFrameTime()
+				if type.timer >= TIME_LIMIT do type.timer = TIME_LIMIT
+			}
+
+			if left_released || !hovering {
+				type.timer = 0
+				type.pressed = false
+			}
+
+			if type.timer >= TIME_LIMIT && hovering && type.pressed {
+				item_button.on_click(user_data, &type)
+				color = BUTTON_CLICK_COLOR
+			}
+
+			y := (bounds.y + bounds.height * 0.5) / DEFAULT_FONT_SIZE / horizontal_ratio_get()
+			text(
+				font,
+				string(rl.TextFormat("%s - $%d", item_button.name, type.price)),
+				[2]f32{bounds.x + bounds.width, y},
+				30,
+				rl.WHITE,
+				DEFAULT_FONT_SIZE,
+			)
+		}
+	case ItemCategory:
+		{
+			player := cast(^Player)user_data
+			assert(player != nil)
+			y := (bounds.y + bounds.height * 0.5) / DEFAULT_FONT_SIZE / horizontal_ratio_get()
+			quantity: i32 = 0
+			switch type {
+			case .Dirt:
+				quantity = player.dirt
+			case .Seed:
+				quantity = player.seeds
+			case .Ballista:
+				quantity = player.turrets
+			}
+			if left_pressed && hovering do player.selected = type
+
+			if player.selected == type {
+				color = rl.GRAY
+				border_color = rl.RED
+			}
+
+			text(
+				font,
+				string(rl.TextFormat("%s (%d)", item_button.name, quantity)),
+				[2]f32{bounds.x + bounds.width, y},
+				30,
+				rl.WHITE,
+				DEFAULT_FONT_SIZE - 2,
+			)
+		}
+	case TurretUpgradeItemButton:
+	}
+
+	rl.DrawRectangleRoundedLinesEx(bounds, 0.2, 10, 5.0, border_color)
+	rl.DrawRectangleRounded(bounds, 0.2, 10, color)
+	rl.DrawTexturePro(
+		item_button.thumbnail,
+		rl.Rectangle {
+			0,
+			0,
+			cast(f32)item_button.thumbnail.width,
+			cast(f32)item_button.thumbnail.height,
+		},
+		bounds,
+		rl.Vector2(0),
+		0.0,
+		color,
+	)
+}
+
+shop_buy :: proc(data: rawptr, item_type: rawptr) {
+	player := cast(^Player)data
+	item := cast(^ShopItemButton)item_type
+
+	assert(item != nil)
+	assert(player != nil)
+
+	if player_pay_money(player, item.price) {
+		switch (item.category) {
+		case .Seed:
+			player.seeds += 1
+		case .Dirt:
+			player.dirt += 1
+		case .Ballista:
+			player.turrets += 1
+
+		}
+	}
+}
+
+inventory_item_select :: proc(data: rawptr, item_type: rawptr) {
+	player := cast(^Player)data
+	item_type := cast(^ItemCategory)item_type
+
+	assert(item_type != nil)
+	assert(player != nil)
+
+	player.selected = item_type^
+}
+
+shop_make_item_button :: proc(item_type: ItemCategory) -> ShopItemButton {
+	BALLISTA_PRICE: i32 : 200
+	SEED_PRICE: i32 : 150
+	DIRT_PRICE: i32 : 100
+	switch (item_type) {
+	case .Seed:
+		return ShopItemButton{SEED_PRICE, item_type, 0, false}
+	case .Dirt:
+		return ShopItemButton{DIRT_PRICE, item_type, 0, false}
+	case .Ballista:
+		return ShopItemButton{BALLISTA_PRICE, item_type, 0, false}
+	}
+	panic("Invalid item type?")
+}
+
+tile_place :: proc(player: ^Player) {
+	dirt_check := player.dirt > 0
+
+	//this is a crazy line
+	seed_check := player.dirt > 0
+
+	ballista_check := player.turrets > 0
+
+	switch player.selected {
+	case .Dirt:
+		if dirt_check {
+			player.dirt -= 1
+		}
+	case .Seed:
+		if seed_check {
+			player.seeds -= 1
+		}
+	case .Ballista:
+		if ballista_check {
+			player.turrets -= 1
+		}
+	}
 }
 
 main :: proc() {
@@ -151,7 +407,12 @@ main :: proc() {
 
 	rl.SetTargetFPS(60)
 
-	main_font := rl.LoadFont("assets/font/MajorMonoDisplay-Regular.ttf")
+	main_font := rl.LoadFontEx(
+		"assets/font/MajorMonoDisplay-Regular.ttf",
+		cast(i32)LARGEST_FONT_SIZE,
+		nil,
+		150,
+	)
 	defer rl.UnloadFont(main_font)
 
 	tileset_texture := rl.LoadTexture("assets/ts1.png")
@@ -202,6 +463,50 @@ main :: proc() {
 
 	game_screen := rl.LoadRenderTexture(viewport_width, viewport_height)
 	defer rl.UnloadRenderTexture(game_screen)
+
+	player := Player {
+		money    = INITIAL_MONEY,
+		beets    = 0,
+		dirt     = 0,
+		seeds    = 0,
+		selected = .Dirt,
+	}
+
+	//rich!
+	player.money = 10_000
+
+	seed_texture := rl.LoadTexture("assets/seed.png")
+	defer rl.UnloadTexture(seed_texture)
+
+	ballista_texture := rl.LoadTexture("assets/balista.png")
+
+	dirt_texture := rl.LoadTexture("assets/dirt.png")
+	defer rl.UnloadTexture(dirt_texture)
+
+	icon_bounds := rl.Rectangle {
+		x      = 0,
+		y      = 0,
+		width  = 128,
+		height = 128,
+	}
+
+	seed_shop_button := ItemButton{seed_texture, shop_buy, "seed", shop_make_item_button(.Seed)}
+	dirt_shop_button := ItemButton{dirt_texture, shop_buy, "dirt", shop_make_item_button(.Dirt)}
+	ballista_shop_button := ItemButton {
+		ballista_texture,
+		shop_buy,
+		"turret",
+		shop_make_item_button(.Ballista),
+	}
+
+	seed_inventory_button := ItemButton{seed_texture, inventory_item_select, "seed", .Seed}
+	dirt_inventory_button := ItemButton{dirt_texture, inventory_item_select, "dirt", .Dirt}
+	ballista_inventory_button := ItemButton {
+		ballista_texture,
+		inventory_item_select,
+		"ballista",
+		.Ballista,
+	}
 
 	for !rl.WindowShouldClose() {
 		rl.BeginDrawing()
@@ -256,12 +561,25 @@ main :: proc() {
 			grid_x_valid := grid_x >= 0 && grid_x < map_size
 			grid_y_valid := grid_y >= 0 && grid_y < map_size
 			if !is_out_of_bounds(index, map_size) && grid_x_valid && grid_y_valid {
-				if (prev_grid_pos.x != grid_x || prev_grid_pos.y != grid_y) ||
-				   (prev_place != place) {
+				cursor_different_place := (prev_grid_pos.x != grid_x || prev_grid_pos.y != grid_y)
+				action_different := (prev_place != place)
+
+				valid_cursor_loc := cursor_different_place || action_different
+
+				if valid_cursor_loc {
 					prev_place = place
-					map_data[index] = place ? 1 : 0
+
+					filled_space := b32(map_data[index])
+
+					if place && !filled_space {
+						map_data[index] = 1
+						tile_place(&player)
+					} else if !place && filled_space {
+						map_data[index] = 0
+					}
 
 					auto_tile_update(map_data[:], bitmask[:])
+
 					prev_grid_pos = [2]i32{grid_x, grid_y}
 				}
 			}
@@ -328,21 +646,65 @@ main :: proc() {
 
 		rl.DrawTexturePro(game_screen.texture, source_game, viewport, rl.Vector2(0), 0, rl.WHITE)
 
-		padding: f32 = 10
-		text(main_font, "todo:", 0, viewport_width, padding, rl.WHITE)
-		text(main_font, "- galaxy stride 3", 1, viewport_width, padding, rl.WHITE)
-		text(main_font, "- synthslayer", 2, viewport_width, padding, rl.WHITE)
-		text(main_font, "- bloodfarme", 3, viewport_width, padding, rl.WHITE)
-		text(main_font, "beets: 69", 5, viewport_width, padding, rl.WHITE)
-		text(main_font, "dirt: 32", 6, viewport_width, padding, rl.WHITE)
-		text(main_font, "money: $100", 8, viewport_width, padding, rl.WHITE)
-		text(main_font, "quota: 200 beets", 10, viewport_width, padding, rl.RED)
+		padding: f32 = 50
 
-		text(main_font, "your god commands", 12, viewport_width, 80, rl.PINK)
+		CENTER_ALIGNMENT: f32 : 200
 
+		icon_bounds.x = cast(f32)viewport_width
+
+		text(
+			main_font,
+			"inventory",
+			[2]f32{cast(f32)viewport_width, 1},
+			100,
+			rl.PINK,
+			LARGEST_FONT_SIZE * 0.9,
+		)
+
+		icon_bounds.y = 200
+		item_button_update(main_font, &seed_inventory_button, icon_bounds, &player, padding)
+
+		icon_bounds.y = 400
+		item_button_update(main_font, &dirt_inventory_button, icon_bounds, &player, padding)
+
+		icon_bounds.y = 600
+		item_button_update(main_font, &ballista_inventory_button, icon_bounds, &player, padding)
+
+		// text(
+		// 	main_font,
+		// 	string(rl.TextFormat("money: $%d", player.money)),
+		// 	[2]f32{cast(f32)viewport_width, 4},
+		// 	padding,
+		// 	rl.WHITE,
+		// )
+
+		text(
+			main_font,
+			"shop",
+			[2]f32{cast(f32)viewport_width, 18},
+			CENTER_ALIGNMENT,
+			rl.PINK,
+			LARGEST_FONT_SIZE,
+		)
+
+		icon_bounds.y = 1000
+		item_button_update(main_font, &seed_shop_button, icon_bounds, &player, padding)
+
+		icon_bounds.y = 1200
+		item_button_update(main_font, &dirt_shop_button, icon_bounds, &player, padding)
+
+		icon_bounds.y = 1400
+		item_button_update(main_font, &ballista_shop_button, icon_bounds, &player, padding)
+
+		text(
+			main_font,
+			string(rl.TextFormat("money: $%d", player.money)),
+			[2]f32{cast(f32)viewport_width, 36},
+			padding,
+			rl.WHITE,
+			DEFAULT_FONT_SIZE,
+		)
 
 	}
-
-
 }
 
