@@ -2,6 +2,7 @@ package beets
 
 import "core:fmt"
 import "core:math"
+import "core:math/linalg"
 import "core:mem"
 import "core:strings"
 
@@ -372,26 +373,93 @@ shop_make_item_button :: proc(item_type: ItemCategory) -> ShopItemButton {
 	panic("Invalid item type?")
 }
 
-tile_place :: proc(player: ^Player) {
-	dirt_check := player.dirt > 0
+tile_place :: proc(player: ^Player, world: ^World, index: i32) {
+	dirt_check := player.dirt > 0 && world.map_data[index] == 0
 
 	//this is a crazy line
-	seed_check := player.dirt > 0
+	seed_check := player.seeds > 0 && world.objects[index] == 0 && world.map_data[index] == 1
 
-	ballista_check := player.turrets > 0
+	ballista_check := player.turrets > 0 && world.map_data[index] == 0
 
 	switch player.selected {
 	case .Dirt:
 		if dirt_check {
 			player.dirt -= 1
+			world.map_data[index] = 1
+			auto_tile_update(world.map_data[:], world.bitmask[:])
 		}
 	case .Seed:
 		if seed_check {
+			world.objects[index] = SEED_PLACE_INDEX
 			player.seeds -= 1
 		}
 	case .Ballista:
 		if ballista_check {
+			world.objects[index] = TURRET_PLACE_INDEX
 			player.turrets -= 1
+		}
+	}
+}
+
+tile_erase :: proc(player: ^Player, world: ^World, index: i32) {
+	object_index := world.objects[index]
+	if world.map_data[index] == 0 && object_index == 0 do return
+
+	defer auto_tile_update(world.map_data[:], world.bitmask[:])
+
+	if object_index != 0 {
+		world.objects[index] = 0
+		if object_index == SEED_PLACE_INDEX do player.seeds += 1
+		if object_index == TURRET_PLACE_INDEX do player.turrets += 1
+		return
+	}
+
+	player.dirt += 1
+	world.map_data[index] = 0
+}
+
+
+MAP_SIZE: i32 : 40
+
+//indices for object array
+SEED_PLACE_INDEX: u8 : 1
+TURRET_PLACE_INDEX: u8 : 2
+GROWN_BEET: u8 : 3
+
+World :: struct {
+	map_data:       [MAP_SIZE * MAP_SIZE]u8,
+	bitmask:        [MAP_SIZE * MAP_SIZE]u8,
+	objects:        [MAP_SIZE * MAP_SIZE]u8,
+	beet_collector: [MAP_SIZE * MAP_SIZE][2]f32,
+	beet_count:     i32,
+}
+
+world_grow_beets :: proc(world: ^World) {
+	for x in 0 ..< MAP_SIZE {
+		for y in 0 ..< MAP_SIZE {
+			index := get_index_from_tile_coordinates(x, y, MAP_SIZE)
+			if world.objects[index] == SEED_PLACE_INDEX do world.objects[index] = GROWN_BEET
+		}
+	}
+}
+
+world_collect_beets :: proc(world: ^World, grid_size: f32) {
+	@(static) beet_screen: [MAP_SIZE * MAP_SIZE][2]f32
+	counter := 0
+	for x in 0 ..< MAP_SIZE {
+		for y in 0 ..< MAP_SIZE {
+			index := get_index_from_tile_coordinates(x, y, MAP_SIZE)
+			if world.objects[index] == GROWN_BEET {
+				world.objects[index] = 0
+				coords_x, coords_y := get_tile_coordinates_from_index(index, MAP_SIZE)
+				half_size := grid_size * 0.5
+				world.beet_collector[counter] = [2]f32 {
+					cast(f32)coords_x * grid_size - half_size,
+					cast(f32)coords_y * grid_size - half_size,
+				}
+				counter += 1
+				world.beet_count += 1
+			}
 		}
 	}
 }
@@ -438,13 +506,6 @@ main :: proc() {
 	grass.width = tile_size
 	grass.height = tile_size
 
-	map_size: i32 : 40
-
-	seeds: map[[2]i32]b32
-	defer delete(seeds)
-
-	map_data: [map_size * map_size]u8
-	bitmask: [map_size * map_size]u8
 
 	prev_grid_pos: [2]i32 = {-1, -1}
 	prev_place: bool = false
@@ -479,9 +540,16 @@ main :: proc() {
 	defer rl.UnloadTexture(seed_texture)
 
 	ballista_texture := rl.LoadTexture("assets/balista.png")
+	defer rl.UnloadTexture(ballista_texture)
 
 	dirt_texture := rl.LoadTexture("assets/dirt.png")
 	defer rl.UnloadTexture(dirt_texture)
+
+	beet_ground_texture := rl.LoadTexture("assets/BeetGround.png")
+	defer rl.UnloadTexture(beet_ground_texture)
+
+	beet_grown_texture := rl.LoadTexture("assets/Beet.png")
+	defer rl.UnloadTexture(beet_grown_texture)
 
 	icon_bounds := rl.Rectangle {
 		x      = 0,
@@ -508,6 +576,10 @@ main :: proc() {
 		.Ballista,
 	}
 
+	world := World{}
+	BEET_PROFIT: i32 : 200
+
+
 	for !rl.WindowShouldClose() {
 		rl.BeginDrawing()
 		defer rl.EndDrawing()
@@ -533,7 +605,7 @@ main :: proc() {
 			camera_restrain_border(
 				&camera,
 				grid_size,
-				map_size,
+				MAP_SIZE,
 				[2]i32{viewport_width, viewport_height},
 			)
 		}
@@ -544,7 +616,7 @@ main :: proc() {
 			camera_restrain_border(
 				&camera,
 				grid_size,
-				map_size,
+				MAP_SIZE,
 				[2]i32{viewport_width, cast(i32)viewport_height},
 			)
 		}
@@ -554,13 +626,17 @@ main :: proc() {
 		place := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
 		destroy := rl.IsMouseButtonDown(rl.MouseButton.RIGHT)
 
+		if rl.IsMouseButtonReleased(rl.MouseButton.RIGHT) {
+			prev_grid_pos = [2]i32{-1, -1}
+		}
+
 		if (place || destroy) && intersect_viewport && !(place && destroy) {
 			grid_x, grid_y := grid_pos_from_world(mouse_pos, grid_size)
-			index := get_index_from_tile_coordinates(grid_x, grid_y, map_size)
+			index := get_index_from_tile_coordinates(grid_x, grid_y, MAP_SIZE)
 
-			grid_x_valid := grid_x >= 0 && grid_x < map_size
-			grid_y_valid := grid_y >= 0 && grid_y < map_size
-			if !is_out_of_bounds(index, map_size) && grid_x_valid && grid_y_valid {
+			grid_x_valid := grid_x >= 0 && grid_x < MAP_SIZE
+			grid_y_valid := grid_y >= 0 && grid_y < MAP_SIZE
+			if !is_out_of_bounds(index, MAP_SIZE) && grid_x_valid && grid_y_valid {
 				cursor_different_place := (prev_grid_pos.x != grid_x || prev_grid_pos.y != grid_y)
 				action_different := (prev_place != place)
 
@@ -569,20 +645,22 @@ main :: proc() {
 				if valid_cursor_loc {
 					prev_place = place
 
-					filled_space := b32(map_data[index])
+					filled_space := b32(world.map_data[index]) || world.objects[index] > 0
 
-					if place && !filled_space {
-						map_data[index] = 1
-						tile_place(&player)
-					} else if !place && filled_space {
-						map_data[index] = 0
+					if place {
+						tile_place(&player, &world, index)
+					} else if filled_space {
+						tile_erase(&player, &world, index)
 					}
-
-					auto_tile_update(map_data[:], bitmask[:])
 
 					prev_grid_pos = [2]i32{grid_x, grid_y}
 				}
 			}
+		}
+
+		if !intersect_viewport {
+			prev_grid_pos.x = -1
+			prev_grid_pos.y = -1
 		}
 
 		rl.BeginTextureMode(game_screen)
@@ -590,19 +668,19 @@ main :: proc() {
 
 		rl.ClearBackground(rl.BLACK)
 
-		for x in 0 ..< map_size {
-			for y in 0 ..< map_size {
+		for x in 0 ..< MAP_SIZE {
+			for y in 0 ..< MAP_SIZE {
 				sprite.x = cast(f32)x * grid_size
 				sprite.y = cast(f32)y * grid_size
 
-				index := get_index_from_tile_coordinates(x, y, map_size)
-				tile := b32(map_data[index])
+				index := get_index_from_tile_coordinates(x, y, MAP_SIZE)
+				tile := b32(world.map_data[index])
 
 				if !tile {
 					rl.DrawTexturePro(tileset_texture, grass, sprite, rl.Vector2(0), 0, rl.WHITE)
 				} else {
 					dirt_tile := rl.Rectangle{}
-					dirt_tile.x = cast(f32)(bitmask[index] + 1) * tile_size
+					dirt_tile.x = cast(f32)(world.bitmask[index] + 1) * tile_size
 					dirt_tile.y = 0
 					dirt_tile.width = tile_size
 					dirt_tile.height = tile_size
@@ -626,6 +704,55 @@ main :: proc() {
 				)
 			}
 		}
+
+		if rl.IsKeyPressed(.R) {
+			world_grow_beets(&world)
+		}
+
+		if rl.IsKeyPressed(.Q) {
+			world_collect_beets(&world, grid_size)
+		}
+
+		for x in 0 ..< MAP_SIZE {
+			for y in 0 ..< MAP_SIZE {
+				sprite.x = cast(f32)x * grid_size
+				sprite.y = cast(f32)y * grid_size
+
+				index := get_index_from_tile_coordinates(x, y, MAP_SIZE)
+				tile := world.objects[index]
+
+				current_texture: rl.Texture2D
+				current_bounds: rl.Rectangle
+				current_bounds.x = 0
+				current_bounds.y = 0
+
+				switch (tile) {
+				case SEED_PLACE_INDEX:
+					current_texture = seed_texture
+					current_bounds.width = cast(f32)seed_texture.width
+					current_bounds.height = cast(f32)seed_texture.height
+				case TURRET_PLACE_INDEX:
+					current_texture = ballista_texture
+					current_bounds.width = cast(f32)ballista_texture.width
+					current_bounds.height = cast(f32)ballista_texture.height
+				case GROWN_BEET:
+					current_texture = beet_ground_texture
+					current_bounds.width = cast(f32)beet_ground_texture.width
+					current_bounds.height = cast(f32)beet_ground_texture.height
+				}
+
+				rl.DrawTexturePro(
+					current_texture,
+					current_bounds,
+					sprite,
+					rl.Vector2(0),
+					0,
+					rl.WHITE,
+				)
+			}
+		}
+
+
 		rl.EndTextureMode()
 
 		rl.EndMode2D()
@@ -643,10 +770,22 @@ main :: proc() {
 		source_game.width = cast(f32)viewport_width
 		source_game.height = -cast(f32)viewport_height
 
-
 		rl.DrawTexturePro(game_screen.texture, source_game, viewport, rl.Vector2(0), 0, rl.WHITE)
 
 		padding: f32 = 50
+		money_pos := [2]f32{cast(f32)viewport_width, 36}
+		text(
+			main_font,
+			string(rl.TextFormat("money: $%d", player.money)),
+			[2]f32{cast(f32)viewport_width, 36},
+			padding,
+			rl.WHITE,
+			DEFAULT_FONT_SIZE,
+		)
+
+		money_pos.x += padding
+		money_pos.y *= horizontal_ratio_get() * DEFAULT_FONT_SIZE
+
 
 		CENTER_ALIGNMENT: f32 : 200
 
@@ -670,14 +809,6 @@ main :: proc() {
 		icon_bounds.y = 600
 		item_button_update(main_font, &ballista_inventory_button, icon_bounds, &player, padding)
 
-		// text(
-		// 	main_font,
-		// 	string(rl.TextFormat("money: $%d", player.money)),
-		// 	[2]f32{cast(f32)viewport_width, 4},
-		// 	padding,
-		// 	rl.WHITE,
-		// )
-
 		text(
 			main_font,
 			"shop",
@@ -698,12 +829,58 @@ main :: proc() {
 
 		text(
 			main_font,
-			string(rl.TextFormat("money: $%d", player.money)),
-			[2]f32{cast(f32)viewport_width, 36},
+			string(rl.TextFormat("beets (%d)", player.beets)),
+			[2]f32{cast(f32)viewport_width, 38},
 			padding,
-			rl.WHITE,
-			DEFAULT_FONT_SIZE,
+			rl.RED,
 		)
+
+		text(
+			main_font,
+			string(rl.TextFormat("quota (%d)", 100)),
+			[2]f32{cast(f32)viewport_width, 40},
+			padding,
+			rl.RED,
+		)
+
+		for i in 0 ..< world.beet_count {
+			world.beet_collector[i] = linalg.lerp(
+				world.beet_collector[i],
+				money_pos,
+				rl.GetFrameTime() * 0.5,
+			)
+		}
+
+		for i in 0 ..< world.beet_count {
+			pos := world.beet_collector[i]
+			sprite.x = pos.x
+			sprite.y = pos.y
+			rl.DrawTexturePro(
+				beet_grown_texture,
+				rl.Rectangle {
+					0,
+					0,
+					cast(f32)beet_grown_texture.width,
+					cast(f32)beet_grown_texture.height,
+				},
+				sprite,
+				rl.Vector2(0),
+				0.0,
+				rl.WHITE,
+			)
+
+			money_text_bounds: rl.Rectangle
+			money_text_bounds.x = money_pos.x
+			money_text_bounds.y = money_pos.y
+			money_text_bounds.width = DEFAULT_FONT_SIZE
+			money_text_bounds.height = DEFAULT_FONT_SIZE
+
+			if rl.CheckCollisionRecs(sprite, money_text_bounds) {
+				world.beet_count -= 1
+				player.beets += 1
+				player.money += BEET_PROFIT
+			}
+		}
 
 	}
 }
