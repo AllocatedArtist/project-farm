@@ -402,7 +402,7 @@ shop_make_item_button :: proc(item_type: ItemCategory) -> ShopItemButton {
 }
 
 tile_place :: proc(player: ^Player, world: ^World, index: i32) {
-	dirt_check := player.dirt > 0 && world.map_data[index] == 0
+	dirt_check := player.dirt > 0 && world.map_data[index] == 0 && world.objects[index] == 0
 
 	//this is a crazy line
 	seed_check := player.seeds > 0 && world.objects[index] == 0 && world.map_data[index] == 1
@@ -479,7 +479,7 @@ World :: struct {
 	beet_count:     i32,
 	game_state:     State,
 	enemies:        [dynamic]Enemy,
-	enemy_target:   map[^Enemy][2]f32,
+	enemy_target:   map[^Enemy]i32,
 	grid_size:      f32,
 }
 
@@ -649,18 +649,12 @@ enemy_create_task_list :: proc(world: ^World, map_width: i32) {
 			pos.y *= cast(f32)world.grid_size
 			pos.x += world.grid_size * 0.5
 			pos.y += world.grid_size * 0.5
-			world.enemy_target[&enemy] = pos
+			world.enemy_target[&enemy] = index
 			dirt_assignment += 1
 			if dirt_assignment >= cast(i32)len(dirt_indices) do dirt_assignment = 0
 		case .Turret:
 			index := turret_indices[turret_assignment]
-			x, y := get_tile_coordinates_from_index(index, map_width)
-			pos := [2]f32{cast(f32)x, cast(f32)y}
-			pos.x *= cast(f32)world.grid_size
-			pos.y *= cast(f32)world.grid_size
-			pos.x += world.grid_size * 0.5
-			pos.y += world.grid_size * 0.5
-			world.enemy_target[&enemy] = pos
+			world.enemy_target[&enemy] = index
 			turret_assignment += 1
 			if turret_assignment >= cast(i32)len(turret_indices) do turret_assignment = 0
 		}
@@ -670,19 +664,34 @@ enemy_create_task_list :: proc(world: ^World, map_width: i32) {
 enemy_update_behavior :: proc(world: ^World, map_width: i32) {
 	for _, i in world.enemies {
 		target := world.enemy_target[&world.enemies[i]]
-		dist := target - world.enemies[i].pos
+		x, y := get_tile_coordinates_from_index(target, map_width)
+
+		pos := [2]f32{cast(f32)x, cast(f32)y}
+		pos.x *= cast(f32)world.grid_size
+		pos.y *= cast(f32)world.grid_size
+		pos.x += world.grid_size * 0.5
+		pos.y += world.grid_size * 0.5
+
+		dist := (pos - (world.enemies[i].pos * horizontal_ratio_get()))
 		dir := linalg.vector_normalize(dist)
+
+
 		speed: f32 = 150
 		world.enemies[i].pos += dir * speed * rl.GetFrameTime()
-		gx, gy := grid_pos_from_world(world.enemies[i].pos, world.grid_size)
+		gx, gy := grid_pos_from_world(
+			world.enemies[i].pos * horizontal_ratio_get(),
+			world.grid_size,
+		)
 		index := get_index_from_tile_coordinates(cast(i32)gx, cast(i32)gy, map_width)
-		if index > -1 {
+		if !is_out_of_bounds(index, map_width) {
 			world.map_data[index] = 0
 			world.objects[index] = 0
-			tx, ty := grid_pos_from_world(target, world.grid_size)
+			tx, ty := grid_pos_from_world(pos, world.grid_size)
 			index = get_index_from_tile_coordinates(cast(i32)tx, cast(i32)ty, map_width)
-			if index == 0 {
-				enemy_create_task_list(world, map_width)
+			if !is_out_of_bounds(index, map_width) {
+				if world.map_data[index] == 0 {
+					enemy_create_task_list(world, map_width)
+				}
 			}
 		}
 	}
@@ -779,6 +788,9 @@ main :: proc() {
 	start_button_texture := rl.LoadTexture("assets/Start.png")
 	defer rl.UnloadTexture(start_button_texture)
 
+	enemy_texture := rl.LoadTexture("assets/human.png")
+	defer rl.UnloadTexture(enemy_texture)
+
 	icon_bounds := rl.Rectangle {
 		x      = 0,
 		y      = 0,
@@ -817,7 +829,9 @@ main :: proc() {
 
 	music.looping = true
 	rl.SetMusicVolume(music, 0.05)
-	// rl.PlayMusicStream(music)
+	rl.PlayMusicStream(music)
+
+	world.grid_size = grid_size
 
 
 	for !rl.WindowShouldClose() {
@@ -850,9 +864,10 @@ main :: proc() {
 				MAP_SIZE,
 				[2]i32{viewport_width, viewport_height},
 			)
+
+			world.grid_size = grid_size
 		}
 
-		world.grid_size = grid_size
 
 		if rl.IsMouseButtonDown(.MIDDLE) {
 			camera_move_speed: f32 = 0.3
@@ -947,9 +962,18 @@ main :: proc() {
 		}
 
 		for _, index in world.enemies {
-			rl.DrawRectangleV(
-				world.enemies[index].pos,
-				rl.Vector2{grid_size * 0.5, grid_size * 0.5},
+			pos := world.enemies[index].pos
+			rl.DrawTexturePro(
+				enemy_texture,
+				rl.Rectangle{0, 0, cast(f32)enemy_texture.width, cast(f32)enemy_texture.height},
+				rl.Rectangle {
+					pos.x * horizontal_ratio_get(),
+					pos.y * horizontal_ratio_get(),
+					grid_size,
+					grid_size,
+				},
+				rl.Vector2(0),
+				0.0,
 				rl.WHITE,
 			)
 		}
@@ -1136,6 +1160,12 @@ main :: proc() {
 
 		switch world.game_state {
 		case .Farm:
+			if len(world.enemies) > 0 {
+				clear(&world.enemies)
+			}
+			if len(world.enemy_target) > 0 {
+				clear(&world.enemy_target)
+			}
 			farm(
 				camera,
 				&world,
