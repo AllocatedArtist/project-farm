@@ -111,9 +111,14 @@ DEFAULT_FONT_SIZE: f32 : 46.0
 LARGEST_FONT_SIZE: f32 : 92.0
 
 DEFAULT_MONITOR_WIDTH: f32 : 3456
+DEFAULT_MONITOR_HEIGHT: f32 : 2160
 
 horizontal_ratio_get :: proc() -> f32 {
 	return cast(f32)rl.GetScreenWidth() / DEFAULT_MONITOR_WIDTH
+}
+
+vertical_ratio_get :: proc() -> f32 {
+	return cast(f32)rl.GetScreenHeight() / DEFAULT_MONITOR_HEIGHT
 }
 
 text :: proc(
@@ -134,7 +139,7 @@ text :: proc(
 	rl.DrawTextEx(
 		font,
 		ctext,
-		rl.Vector2{cast(f32)pos.x + padding, pos.y * DEFAULT_FONT_SIZE * ratio},
+		rl.Vector2{(cast(f32)pos.x + padding), pos.y * DEFAULT_FONT_SIZE * ratio},
 		font_size,
 		1.0,
 		color,
@@ -192,6 +197,7 @@ ItemType :: union {
 	ShopItemButton,
 	InventoryItemButton,
 	TurretUpgradeItemButton,
+	NextPhaseButton, //ShopItemButton was meant to be a generic button
 }
 
 ShopItemButton :: struct {
@@ -203,11 +209,11 @@ ShopItemButton :: struct {
 
 InventoryItemButton :: ItemCategory
 
+NextPhaseButton :: i32
 
 TurretUpgradeItemButton :: struct {
 	nothing: f32,
 }
-
 
 ItemButton :: struct {
 	thumbnail: rl.Texture2D,
@@ -226,13 +232,21 @@ item_button_update :: proc(
 	bounds: rl.Rectangle,
 	user_data: rawptr,
 	padding: f32,
+	update: bool,
 ) {
 
 	bounds := bounds
 	bounds.x += padding * horizontal_ratio_get()
-	bounds.y *= horizontal_ratio_get()
 	bounds.width *= horizontal_ratio_get()
 	bounds.height *= horizontal_ratio_get()
+
+	_, is_phase_button := item_button.item_type.(NextPhaseButton)
+	if is_phase_button {
+		bounds.y *= vertical_ratio_get()
+	} else {
+		bounds.y *= horizontal_ratio_get()
+	}
+
 
 	hovering := rl.CheckCollisionPointRec(rl.GetMousePosition(), bounds)
 	left_pressed := rl.IsMouseButtonPressed(.LEFT)
@@ -242,30 +256,33 @@ item_button_update :: proc(
 
 	color := hovering ? BUTTON_HOVER_COLOR : BUTTON_IDLE_COLOR
 	border_color := rl.GREEN
+	use_bg := true
 
 	switch &type in item_button.item_type {
 	case ShopItemButton:
 		{
-			TIME_LIMIT: f32 : 0.85
-			if left_pressed && hovering {
-				type.pressed = true
-				item_button.on_click(user_data, &type)
-				color = BUTTON_CLICK_COLOR
-			}
+			if update {
+				TIME_LIMIT: f32 : 0.85
+				if left_pressed && hovering {
+					type.pressed = true
+					item_button.on_click(user_data, &type)
+					color = BUTTON_CLICK_COLOR
+				}
 
-			if left_down && hovering {
-				type.timer += rl.GetFrameTime()
-				if type.timer >= TIME_LIMIT do type.timer = TIME_LIMIT
-			}
+				if left_down && hovering {
+					type.timer += rl.GetFrameTime()
+					if type.timer >= TIME_LIMIT do type.timer = TIME_LIMIT
+				}
 
-			if left_released || !hovering {
-				type.timer = 0
-				type.pressed = false
-			}
+				if left_released || !hovering {
+					type.timer = 0
+					type.pressed = false
+				}
 
-			if type.timer >= TIME_LIMIT && hovering && type.pressed {
-				item_button.on_click(user_data, &type)
-				color = BUTTON_CLICK_COLOR
+				if type.timer >= TIME_LIMIT && hovering && type.pressed {
+					item_button.on_click(user_data, &type)
+					color = BUTTON_CLICK_COLOR
+				}
 			}
 
 			y := (bounds.y + bounds.height * 0.5) / DEFAULT_FONT_SIZE / horizontal_ratio_get()
@@ -292,11 +309,14 @@ item_button_update :: proc(
 			case .Ballista:
 				quantity = player.turrets
 			}
-			if left_pressed && hovering do player.selected = type
 
-			if player.selected == type {
-				color = rl.GRAY
-				border_color = rl.RED
+			if update {
+				if left_pressed && hovering do player.selected = type
+
+				if player.selected == type {
+					color = rl.GRAY
+					border_color = rl.RED
+				}
 			}
 
 			text(
@@ -309,10 +329,18 @@ item_button_update :: proc(
 			)
 		}
 	case TurretUpgradeItemButton:
+	case NextPhaseButton:
+		use_bg = false
+		if update {
+			if left_pressed && hovering do item_button.on_click(user_data, &type)
+		}
 	}
 
-	rl.DrawRectangleRoundedLinesEx(bounds, 0.2, 10, 5.0, border_color)
-	rl.DrawRectangleRounded(bounds, 0.2, 10, color)
+
+	if use_bg {
+		rl.DrawRectangleRoundedLinesEx(bounds, 0.2, 10, 5.0, border_color)
+		rl.DrawRectangleRounded(bounds, 0.2, 10, color)
+	}
 	rl.DrawTexturePro(
 		item_button.thumbnail,
 		rl.Rectangle {
@@ -426,12 +454,18 @@ SEED_PLACE_INDEX: u8 : 1
 TURRET_PLACE_INDEX: u8 : 2
 GROWN_BEET: u8 : 3
 
+State :: enum {
+	Farm,
+	Defend,
+}
+
 World :: struct {
 	map_data:       [MAP_SIZE * MAP_SIZE]u8,
 	bitmask:        [MAP_SIZE * MAP_SIZE]u8,
 	objects:        [MAP_SIZE * MAP_SIZE]u8,
 	beet_collector: [MAP_SIZE * MAP_SIZE][2]f32,
 	beet_count:     i32,
+	game_state:     State,
 }
 
 world_grow_beets :: proc(world: ^World) {
@@ -470,6 +504,65 @@ world_collect_beets :: proc(world: ^World, camera: rl.Camera2D, grid_size: f32) 
 
 ease_in :: proc(x: f32) -> f32 {
 	return x * x
+}
+
+
+farm :: proc(
+	camera: rl.Camera2D,
+	world: ^World,
+	player: ^Player,
+	prev_grid_pos: ^[2]i32,
+	intersect_viewport: bool,
+	grid_size: f32,
+	prev_place: ^bool,
+) {
+	mouse_pos := rl.GetScreenToWorld2D(rl.GetMousePosition(), camera)
+
+	place := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
+	destroy := rl.IsMouseButtonDown(rl.MouseButton.RIGHT)
+
+	if rl.IsMouseButtonReleased(rl.MouseButton.RIGHT) {
+		prev_grid_pos^ = [2]i32{-1, -1}
+	}
+
+	if (place || destroy) && intersect_viewport && !(place && destroy) {
+		grid_x, grid_y := grid_pos_from_world(mouse_pos, grid_size)
+		index := get_index_from_tile_coordinates(grid_x, grid_y, MAP_SIZE)
+
+		grid_x_valid := grid_x >= 0 && grid_x < MAP_SIZE
+		grid_y_valid := grid_y >= 0 && grid_y < MAP_SIZE
+		if !is_out_of_bounds(index, MAP_SIZE) && grid_x_valid && grid_y_valid {
+			cursor_different_place := (prev_grid_pos.x != grid_x || prev_grid_pos.y != grid_y)
+			action_different := (prev_place^ != place)
+
+			valid_cursor_loc := cursor_different_place || action_different
+
+			if valid_cursor_loc {
+				prev_place^ = place
+
+				filled_space := b32(world.map_data[index]) || world.objects[index] > 0
+
+				if place {
+					tile_place(player, world, index)
+				} else if filled_space {
+					tile_erase(player, world, index)
+				}
+
+				prev_grid_pos^ = [2]i32{grid_x, grid_y}
+			}
+		}
+	}
+
+	if !intersect_viewport {
+		prev_grid_pos.x = -1
+		prev_grid_pos.y = -1
+	}
+}
+
+start_wave_phase :: proc(user_data: rawptr, you_honestly_do_not_need_this: rawptr) {
+	world := cast(^World)user_data
+	assert(world != nil)
+	world.game_state = .Defend
 }
 
 main :: proc() {
@@ -559,6 +652,9 @@ main :: proc() {
 	beet_grown_texture := rl.LoadTexture("assets/Beet.png")
 	defer rl.UnloadTexture(beet_grown_texture)
 
+	start_button_texture := rl.LoadTexture("assets/Start.png")
+	defer rl.UnloadTexture(start_button_texture)
+
 	icon_bounds := rl.Rectangle {
 		x      = 0,
 		y      = 0,
@@ -583,6 +679,8 @@ main :: proc() {
 		"ballista",
 		.Ballista,
 	}
+
+	next_phase_button := ItemButton{start_button_texture, start_wave_phase, "start", 0}
 
 	world := World{}
 	BEET_PROFIT: i32 : 200
@@ -627,48 +725,6 @@ main :: proc() {
 				MAP_SIZE,
 				[2]i32{viewport_width, cast(i32)viewport_height},
 			)
-		}
-
-		mouse_pos := rl.GetScreenToWorld2D(rl.GetMousePosition(), camera)
-
-		place := rl.IsMouseButtonDown(rl.MouseButton.LEFT)
-		destroy := rl.IsMouseButtonDown(rl.MouseButton.RIGHT)
-
-		if rl.IsMouseButtonReleased(rl.MouseButton.RIGHT) {
-			prev_grid_pos = [2]i32{-1, -1}
-		}
-
-		if (place || destroy) && intersect_viewport && !(place && destroy) {
-			grid_x, grid_y := grid_pos_from_world(mouse_pos, grid_size)
-			index := get_index_from_tile_coordinates(grid_x, grid_y, MAP_SIZE)
-
-			grid_x_valid := grid_x >= 0 && grid_x < MAP_SIZE
-			grid_y_valid := grid_y >= 0 && grid_y < MAP_SIZE
-			if !is_out_of_bounds(index, MAP_SIZE) && grid_x_valid && grid_y_valid {
-				cursor_different_place := (prev_grid_pos.x != grid_x || prev_grid_pos.y != grid_y)
-				action_different := (prev_place != place)
-
-				valid_cursor_loc := cursor_different_place || action_different
-
-				if valid_cursor_loc {
-					prev_place = place
-
-					filled_space := b32(world.map_data[index]) || world.objects[index] > 0
-
-					if place {
-						tile_place(&player, &world, index)
-					} else if filled_space {
-						tile_erase(&player, &world, index)
-					}
-
-					prev_grid_pos = [2]i32{grid_x, grid_y}
-				}
-			}
-		}
-
-		if !intersect_viewport {
-			prev_grid_pos.x = -1
-			prev_grid_pos.y = -1
 		}
 
 		rl.BeginTextureMode(game_screen)
@@ -791,6 +847,9 @@ main :: proc() {
 
 		icon_bounds.x = cast(f32)viewport_width
 
+		icon_bounds.width = 128
+		icon_bounds.height = 128
+
 		text(
 			main_font,
 			"inventory",
@@ -800,14 +859,37 @@ main :: proc() {
 			LARGEST_FONT_SIZE * 0.9,
 		)
 
+		is_farm_phase := world.game_state == .Farm
+
 		icon_bounds.y = 200
-		item_button_update(main_font, &seed_inventory_button, icon_bounds, &player, padding)
+		item_button_update(
+			main_font,
+			&seed_inventory_button,
+			icon_bounds,
+			&player,
+			padding,
+			is_farm_phase,
+		)
 
 		icon_bounds.y = 400
-		item_button_update(main_font, &dirt_inventory_button, icon_bounds, &player, padding)
+		item_button_update(
+			main_font,
+			&dirt_inventory_button,
+			icon_bounds,
+			&player,
+			padding,
+			is_farm_phase,
+		)
 
 		icon_bounds.y = 600
-		item_button_update(main_font, &ballista_inventory_button, icon_bounds, &player, padding)
+		item_button_update(
+			main_font,
+			&ballista_inventory_button,
+			icon_bounds,
+			&player,
+			padding,
+			is_farm_phase,
+		)
 
 		text(
 			main_font,
@@ -819,13 +901,34 @@ main :: proc() {
 		)
 
 		icon_bounds.y = 1000
-		item_button_update(main_font, &seed_shop_button, icon_bounds, &player, padding)
+		item_button_update(
+			main_font,
+			&seed_shop_button,
+			icon_bounds,
+			&player,
+			padding,
+			is_farm_phase,
+		)
 
 		icon_bounds.y = 1200
-		item_button_update(main_font, &dirt_shop_button, icon_bounds, &player, padding)
+		item_button_update(
+			main_font,
+			&dirt_shop_button,
+			icon_bounds,
+			&player,
+			padding,
+			is_farm_phase,
+		)
 
 		icon_bounds.y = 1400
-		item_button_update(main_font, &ballista_shop_button, icon_bounds, &player, padding)
+		item_button_update(
+			main_font,
+			&ballista_shop_button,
+			icon_bounds,
+			&player,
+			padding,
+			is_farm_phase,
+		)
 
 		text(
 			main_font,
@@ -882,6 +985,27 @@ main :: proc() {
 				player.beets += 1
 				player.money += BEET_PROFIT
 			}
+		}
+
+
+		switch world.game_state {
+		case .Farm:
+			farm(
+				camera,
+				&world,
+				&player,
+				&prev_grid_pos,
+				intersect_viewport,
+				grid_size,
+				&prev_place,
+			)
+
+			icon_bounds.y = 1900
+			icon_bounds.width = cast(f32)next_phase_button.thumbnail.width
+			icon_bounds.height = cast(f32)next_phase_button.thumbnail.height
+			item_button_update(main_font, &next_phase_button, icon_bounds, &world, -600, true)
+
+		case .Defend:
 		}
 
 	}
