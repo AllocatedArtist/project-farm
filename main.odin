@@ -443,7 +443,7 @@ world_grow_beets :: proc(world: ^World) {
 	}
 }
 
-world_collect_beets :: proc(world: ^World, grid_size: f32) {
+world_collect_beets :: proc(world: ^World, camera: rl.Camera2D, grid_size: f32) {
 	@(static) beet_screen: [MAP_SIZE * MAP_SIZE][2]f32
 	counter := 0
 	for x in 0 ..< MAP_SIZE {
@@ -457,11 +457,19 @@ world_collect_beets :: proc(world: ^World, grid_size: f32) {
 					cast(f32)coords_x * grid_size - half_size,
 					cast(f32)coords_y * grid_size - half_size,
 				}
+				world.beet_collector[counter] = rl.GetWorldToScreen2D(
+					world.beet_collector[counter],
+					camera,
+				)
 				counter += 1
 				world.beet_count += 1
 			}
 		}
 	}
+}
+
+ease_in :: proc(x: f32) -> f32 {
+	return x * x
 }
 
 main :: proc() {
@@ -705,14 +713,6 @@ main :: proc() {
 			}
 		}
 
-		if rl.IsKeyPressed(.R) {
-			world_grow_beets(&world)
-		}
-
-		if rl.IsKeyPressed(.Q) {
-			world_collect_beets(&world, grid_size)
-		}
-
 		for x in 0 ..< MAP_SIZE {
 			for y in 0 ..< MAP_SIZE {
 				sprite.x = cast(f32)x * grid_size
@@ -843,11 +843,13 @@ main :: proc() {
 			rl.RED,
 		)
 
+		lerp_duration: f32 = 14.0
+		start_time: f32 = 2.1
 		for i in 0 ..< world.beet_count {
 			world.beet_collector[i] = linalg.lerp(
 				world.beet_collector[i],
 				money_pos,
-				rl.GetFrameTime() * 0.5,
+				ease_in(start_time / lerp_duration),
 			)
 		}
 
