@@ -459,6 +459,18 @@ State :: enum {
 	Defend,
 }
 
+EnemyTargetType :: enum {
+	Crop,
+	Turret,
+}
+
+
+Enemy :: struct {
+	pos:    [2]f32,
+	health: i32,
+	target: EnemyTargetType,
+}
+
 World :: struct {
 	map_data:       [MAP_SIZE * MAP_SIZE]u8,
 	bitmask:        [MAP_SIZE * MAP_SIZE]u8,
@@ -466,6 +478,9 @@ World :: struct {
 	beet_collector: [MAP_SIZE * MAP_SIZE][2]f32,
 	beet_count:     i32,
 	game_state:     State,
+	enemies:        [dynamic]Enemy,
+	enemy_target:   map[^Enemy][2]f32,
+	grid_size:      f32,
 }
 
 world_grow_beets :: proc(world: ^World) {
@@ -563,7 +578,116 @@ start_wave_phase :: proc(user_data: rawptr, you_honestly_do_not_need_this: rawpt
 	world := cast(^World)user_data
 	assert(world != nil)
 	world.game_state = .Defend
+	size := cast(i32)MAP_SIZE * cast(i32)world.grid_size
+	spawn_enemies(world, size, size, 10)
+	enemy_create_task_list(world, MAP_SIZE)
 }
+
+spawn_enemies :: proc(
+	world: ^World,
+	map_width_length: i32,
+	map_height_length: i32,
+	quantity: i32,
+) {
+	ENEMY_HEALTH: i32 : 10
+
+	//60% of enemies are chosen to target crops
+	quantity_farming := cast(i32)math.ceil(cast(f32)quantity * 0.6)
+
+	for i in 0 ..< quantity {
+		x := cast(i32)rl.GetRandomValue(-10, map_width_length + 10)
+		y := cast(i32)rl.GetRandomValue(0, 1) * map_height_length
+
+		enemy: Enemy
+
+		enemy.target = i <= quantity_farming ? .Crop : .Turret
+
+		enemy.pos = [2]f32{cast(f32)x, cast(f32)y}
+		enemy.health = ENEMY_HEALTH
+		append(&world.enemies, enemy)
+	}
+}
+
+enemy_create_task_list :: proc(world: ^World, map_width: i32) {
+	dirt_indices: [dynamic]i32
+	turret_indices: [dynamic]i32
+
+	index := 0
+	for tile in world.map_data {
+		if tile == 1 do append(&dirt_indices, cast(i32)index)
+		index += 1
+	}
+
+	index = 0
+	for value in world.objects {
+		if value == TURRET_PLACE_INDEX do append(&turret_indices, cast(i32)index)
+		index += 1
+	}
+
+	if len(turret_indices) == 0 {
+		for &enemy in world.enemies do enemy.target = .Crop
+	}
+
+	if len(dirt_indices) == 0 {
+		for &enemy in world.enemies do enemy.target = .Turret
+	}
+
+	if len(turret_indices) == 0 && len(dirt_indices) == 0 {
+		world.game_state = .Farm
+		return
+	}
+
+	dirt_assignment: i32 = 0
+	turret_assignment: i32 = 0
+	for &enemy in world.enemies {
+		switch enemy.target {
+		case .Crop:
+			index := dirt_indices[dirt_assignment]
+			x, y := get_tile_coordinates_from_index(index, map_width)
+			pos := [2]f32{cast(f32)x, cast(f32)y}
+			pos.x *= cast(f32)world.grid_size
+			pos.y *= cast(f32)world.grid_size
+			pos.x += world.grid_size * 0.5
+			pos.y += world.grid_size * 0.5
+			world.enemy_target[&enemy] = pos
+			dirt_assignment += 1
+			if dirt_assignment >= cast(i32)len(dirt_indices) do dirt_assignment = 0
+		case .Turret:
+			index := turret_indices[turret_assignment]
+			x, y := get_tile_coordinates_from_index(index, map_width)
+			pos := [2]f32{cast(f32)x, cast(f32)y}
+			pos.x *= cast(f32)world.grid_size
+			pos.y *= cast(f32)world.grid_size
+			pos.x += world.grid_size * 0.5
+			pos.y += world.grid_size * 0.5
+			world.enemy_target[&enemy] = pos
+			turret_assignment += 1
+			if turret_assignment >= cast(i32)len(turret_indices) do turret_assignment = 0
+		}
+	}
+}
+
+enemy_update_behavior :: proc(world: ^World, map_width: i32) {
+	for _, i in world.enemies {
+		target := world.enemy_target[&world.enemies[i]]
+		dist := target - world.enemies[i].pos
+		dir := linalg.vector_normalize(dist)
+		speed: f32 = 150
+		world.enemies[i].pos += dir * speed * rl.GetFrameTime()
+		gx, gy := grid_pos_from_world(world.enemies[i].pos, world.grid_size)
+		index := get_index_from_tile_coordinates(cast(i32)gx, cast(i32)gy, map_width)
+		if index > -1 {
+			world.map_data[index] = 0
+			world.objects[index] = 0
+			tx, ty := grid_pos_from_world(target, world.grid_size)
+			index = get_index_from_tile_coordinates(cast(i32)tx, cast(i32)ty, map_width)
+			if index == 0 {
+				enemy_create_task_list(world, map_width)
+			}
+		}
+	}
+}
+
 
 main :: proc() {
 
@@ -685,6 +809,16 @@ main :: proc() {
 	world := World{}
 	BEET_PROFIT: i32 : 200
 
+	rl.InitAudioDevice()
+	defer rl.CloseAudioDevice()
+
+	music := rl.LoadMusicStream("assets/theme.wav")
+	defer rl.UnloadMusicStream(music)
+
+	music.looping = true
+	rl.SetMusicVolume(music, 0.05)
+	// rl.PlayMusicStream(music)
+
 
 	for !rl.WindowShouldClose() {
 		rl.BeginDrawing()
@@ -697,6 +831,8 @@ main :: proc() {
 		viewport.height = cast(f32)viewport_height
 
 		intersect_viewport := rl.CheckCollisionPointRec(rl.GetMousePosition(), viewport)
+
+		rl.UpdateMusicStream(music)
 
 		if rl.IsWindowResized() {
 			viewport_width = cast(i32)math.ceil(cast(f32)rl.GetScreenWidth() * ratio_x)
@@ -715,6 +851,8 @@ main :: proc() {
 				[2]i32{viewport_width, viewport_height},
 			)
 		}
+
+		world.grid_size = grid_size
 
 		if rl.IsMouseButtonDown(.MIDDLE) {
 			camera_move_speed: f32 = 0.3
@@ -806,6 +944,14 @@ main :: proc() {
 					rl.WHITE,
 				)
 			}
+		}
+
+		for _, index in world.enemies {
+			rl.DrawRectangleV(
+				world.enemies[index].pos,
+				rl.Vector2{grid_size * 0.5, grid_size * 0.5},
+				rl.WHITE,
+			)
 		}
 
 
@@ -1006,6 +1152,7 @@ main :: proc() {
 			item_button_update(main_font, &next_phase_button, icon_bounds, &world, -600, true)
 
 		case .Defend:
+			enemy_update_behavior(&world, MAP_SIZE)
 		}
 
 	}
